@@ -28,7 +28,7 @@ const GCSRequiredEnv = "E2E_REQUIRE_GCS"
 func GCSRequired() bool { return os.Getenv(GCSRequiredEnv) == "true" }
 
 // RequireGCSBackend skips t unless backend, the install's snapshot backend
-// as the objectstore-plugin reports it, is GCS. Under GCSRequired it fails
+// as its ate-storage-config gives it, is GCS. Under GCSRequired it fails
 // instead.
 func RequireGCSBackend(t testing.TB, backend string) {
 	t.Helper()
