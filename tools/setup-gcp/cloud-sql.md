@@ -26,11 +26,12 @@ authentication**](https://docs.cloud.google.com/sql/docs/postgres/iam-authentica
 ## 1. Provision
 
 The cluster must have Workload Identity enabled (clusters created by
-`setup-gcp create cluster` do), and the VPC needs [private services
+`setup-gcp create cluster` do). To use Private Service Connect, go to
+[Private Service Connect](#private-service-connect) now. Otherwise, the VPC
+needs [private services
 access](https://cloud.google.com/sql/docs/postgres/configure-private-services-access)
 (one-time per VPC; the tool prints the two `gcloud` commands if it is
-missing), unless you use [Private Service Connect](#private-service-connect).
-Then:
+missing). Then:
 
 ```sh
 export PROJECT_ID=<project>
@@ -72,20 +73,26 @@ with `gcloud sql instances patch`.
 To reach the instance through a
 [Private Service Connect](https://cloud.google.com/sql/docs/postgres/about-private-service-connect)
 endpoint instead of private services access, create the instance with
-`gcloud`:
+`gcloud`. Run every block below in the same shell, in the cluster's project:
 
 ```sh
+export PROJECT_ID=<project>
+export CLOUDSDK_CORE_PROJECT="${PROJECT_ID}"
+gcloud services enable sqladmin.googleapis.com dns.googleapis.com
 gcloud sql instances create <instance> --region=<region> \
   --database-version=POSTGRES_18 --edition=enterprise --tier=db-custom-2-8192 \
   --database-flags=cloudsql.iam_authentication=on \
   --enable-point-in-time-recovery --deletion-protection \
-  --enable-private-service-connect --allowed-psc-projects=<project> --no-assign-ip
+  --enable-private-service-connect --allowed-psc-projects="${PROJECT_ID}" --no-assign-ip
 ```
 
-With `psc`, the proxy connects to the instance's DNS name, so the cluster's
-network needs an endpoint for the instance and a DNS record for that name.
-Cloud SQL creates both when the instance has `--psc-auto-connections` and
-`--enable-psc-auto-dns` and a service connection policy covers the network; see
+With Private Service Connect, the proxy connects to the instance's DNS name.
+The cluster's network needs an endpoint for the instance and a DNS record for
+that name. Google recommends having Cloud SQL create both: add
+`--psc-auto-connections=network=projects/${PROJECT_ID}/global/networks/<network>`
+and `--enable-psc-auto-dns` to the command above. That also needs a service
+connection policy for the network, which `--enable-psc-auto-connection-policy`
+creates if it is missing; see
 [Configure Private Service Connect](https://cloud.google.com/sql/docs/postgres/configure-private-service-connect).
 To create them yourself instead:
 
@@ -103,19 +110,20 @@ gcloud dns record-sets create "${DNS_NAME}" --zone=<zone> --type=A --ttl=300 \
   --rrdatas="${ENDPOINT_IP}"
 ```
 
-The zone serves every instance in the region, so a later instance needs only
-its own endpoint and record.
+The zone serves every instance in the region on that network, so a later
+instance needs only its own endpoint and record.
 
 Then run `setup-gcp create cloudsql`. It skips an instance that already exists
 with `cloudsql.iam_authentication=on` and creates everything else in the table
 above:
 
 ```sh
-export PROJECT_ID=<project>
 go run ./tools/setup-gcp create cloudsql --instance=<instance> --region=<region>
 ```
 
-In section 3, also set `ATE_API_POSTGRES_CLOUDSQL_IP_TYPE=psc`.
+In section 3, also export `ATE_API_POSTGRES_CLOUDSQL_IP_TYPE=psc` on every
+deploy that sets `ATE_API_POSTGRES_CLOUDSQL_INSTANCE`. Without it, the proxy
+dials the private address, which a PSC-only instance does not have.
 
 ## 2. One-time roles and schema privileges
 
@@ -127,7 +135,7 @@ IAM user membership, create the `substrate` schema, and configure the
 owner's default privileges before deploying. The IAM database username is the GSA email **without**
 `.gserviceaccount.com`.
 
-Getting that `postgres` session on a private-IP-only instance takes two
+Getting that `postgres` session on an instance with no public IP takes two
 steps: give `postgres` a temporary password (fresh instances have none), and
 run `psql` from inside the cluster, which is the only place with a network
 path to the instance. Replace `<project>`, `<instance>`, and `<temp-pw>` below:
@@ -135,8 +143,11 @@ path to the instance. Replace `<project>`, `<instance>`, and `<temp-pw>` below:
 ```sh
 gcloud sql users set-password postgres --instance=<instance> --password='<temp-pw>'
 HOST=$(gcloud sql instances describe <instance> --format="value(ipAddresses[0].ipAddress)")
-# Private Service Connect: the instance has no IP address, so use its DNS name.
+# Private Service Connect: the instance has no IP address. With your own DNS
+# record (the manual steps above), use the instance's DNS name:
 # HOST=$(gcloud sql instances describe <instance> --format="value(dnsName)"); HOST=${HOST%.}
+# With DNS automation, use the .sql-psc.goog name Cloud SQL created; see
+# https://cloud.google.com/sql/docs/postgres/configure-dns
 kubectl run psql-grant --rm -i --restart=Never --image=postgres:18-alpine -- \
   psql "postgresql://postgres:<temp-pw>@${HOST}:5432/atepg?sslmode=require" \
   -v ON_ERROR_STOP=1 <<'SQL'
