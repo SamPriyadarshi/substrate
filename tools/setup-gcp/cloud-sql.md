@@ -72,9 +72,7 @@ with `gcloud sql instances patch`.
 To reach the instance through a
 [Private Service Connect](https://cloud.google.com/sql/docs/postgres/about-private-service-connect)
 endpoint instead of private services access, create the instance with
-`gcloud`. `setup-gcp create cloudsql` skips an instance that already exists
-with `cloudsql.iam_authentication=on`, and still creates the rest of the
-table above.
+`gcloud`:
 
 ```sh
 gcloud sql instances create <instance> --region=<region> \
@@ -84,7 +82,12 @@ gcloud sql instances create <instance> --region=<region> \
   --enable-private-service-connect --allowed-psc-projects=<project> --no-assign-ip
 ```
 
-Create an endpoint for the instance in the cluster's network:
+With `psc`, the proxy connects to the instance's DNS name, so the cluster's
+network needs an endpoint for the instance and a DNS record for that name.
+Cloud SQL creates both when the instance has `--psc-auto-connections` and
+`--enable-psc-auto-dns` and a service connection policy covers the network; see
+[Configure Private Service Connect](https://cloud.google.com/sql/docs/postgres/configure-private-service-connect).
+To create them yourself instead:
 
 ```sh
 ATTACHMENT=$(gcloud sql instances describe <instance> --format='value(pscServiceAttachmentLink)')
@@ -92,31 +95,27 @@ gcloud compute addresses create <endpoint> --region=<region> --subnet=<cluster s
 gcloud compute forwarding-rules create <endpoint> --region=<region> --network=<network> \
   --address=<endpoint> --target-service-attachment="${ATTACHMENT}"
 ENDPOINT_IP=$(gcloud compute addresses describe <endpoint> --region=<region> --format='value(address)')
-```
-
-With `psc`, the proxy connects to the instance's DNS name, so the network
-needs a record for it:
-
-```sh
 DNS_NAME=$(gcloud sql instances describe <instance> --format='value(dnsName)')
-gcloud dns managed-zones create <zone> --dns-name="${DNS_NAME}" \
+gcloud dns managed-zones create <zone> --dns-name=<region>.sql.goog. \
   --description="Cloud SQL Private Service Connect" \
   --visibility=private --networks=<network>
 gcloud dns record-sets create "${DNS_NAME}" --zone=<zone> --type=A --ttl=300 \
   --rrdatas="${ENDPOINT_IP}"
 ```
 
-Cloud SQL can also create the endpoint and the DNS record for you; see
-[Configure Private Service Connect](https://cloud.google.com/sql/docs/postgres/configure-private-service-connect).
-Then create the database, GSA, and IAM database user:
+The zone serves every instance in the region, so a later instance needs only
+its own endpoint and record.
+
+Then run `setup-gcp create cloudsql`. It skips an instance that already exists
+with `cloudsql.iam_authentication=on` and creates everything else in the table
+above:
 
 ```sh
+export PROJECT_ID=<project>
 go run ./tools/setup-gcp create cloudsql --instance=<instance> --region=<region>
 ```
 
-In section 2, use `ENDPOINT_IP` as `IP`, because the instance has no IP
-address of its own. In section 3, also set
-`ATE_API_POSTGRES_CLOUDSQL_IP_TYPE=psc`.
+In section 3, also set `ATE_API_POSTGRES_CLOUDSQL_IP_TYPE=psc`.
 
 ## 2. One-time roles and schema privileges
 
@@ -135,9 +134,11 @@ path to the instance. Replace `<project>`, `<instance>`, and `<temp-pw>` below:
 
 ```sh
 gcloud sql users set-password postgres --instance=<instance> --password='<temp-pw>'
-IP=$(gcloud sql instances describe <instance> --format="value(ipAddresses[0].ipAddress)")
+HOST=$(gcloud sql instances describe <instance> --format="value(ipAddresses[0].ipAddress)")
+# Private Service Connect: the instance has no IP address, so use its DNS name.
+# HOST=$(gcloud sql instances describe <instance> --format="value(dnsName)"); HOST=${HOST%.}
 kubectl run psql-grant --rm -i --restart=Never --image=postgres:18-alpine -- \
-  psql "postgresql://postgres:<temp-pw>@${IP}:5432/atepg?sslmode=require" \
+  psql "postgresql://postgres:<temp-pw>@${HOST}:5432/atepg?sslmode=require" \
   -v ON_ERROR_STOP=1 <<'SQL'
 BEGIN;
 CREATE ROLE substrate_owner NOLOGIN;
