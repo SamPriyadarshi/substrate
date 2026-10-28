@@ -51,15 +51,34 @@ import (
 const probeTemplate = "probe"
 
 // requireGCS skips, or fails under e2e.GCSRequired, unless the install under
-// test stores snapshots in GCS. The backend is ATE_STORAGE_BACKEND in the
-// ate-storage-config ConfigMap the objectstore-plugin sidecars read.
+// test stores snapshots in GCS. The backend is ATE_STORAGE_BACKEND on the
+// objectstore-plugin sidecar of ate-api-server: its inline env, which
+// overrides envFrom, else the ate-storage-config ConfigMap.
 func requireGCS(t *testing.T, ctx context.Context, clients *e2e.Clients) {
 	t.Helper()
-	cm, err := clients.K8s.CoreV1().ConfigMaps(e2e.SystemNamespace()).Get(ctx, e2e.ResourceName("ate-storage-config"), metav1.GetOptions{})
+	ns := e2e.SystemNamespace()
+	deploy, err := clients.K8s.AppsV1().Deployments(ns).Get(ctx, e2e.ResourceName("ate-api-server"), metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("getting the ate-storage-config ConfigMap: %v", err)
+		t.Fatalf("getting the ate-api-server Deployment: %v", err)
 	}
-	backend := cm.Data["ATE_STORAGE_BACKEND"]
+	backend := ""
+	for _, c := range deploy.Spec.Template.Spec.InitContainers {
+		if c.Name != "objectstore-plugin" {
+			continue
+		}
+		for _, env := range c.Env {
+			if env.Name == "ATE_STORAGE_BACKEND" && env.Value != "" {
+				backend = env.Value
+			}
+		}
+	}
+	if backend == "" {
+		cm, err := clients.K8s.CoreV1().ConfigMaps(ns).Get(ctx, e2e.ResourceName("ate-storage-config"), metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("getting the ate-storage-config ConfigMap: %v", err)
+		}
+		backend = cm.Data["ATE_STORAGE_BACKEND"]
+	}
 	if backend == "" {
 		backend = "gcs"
 	}

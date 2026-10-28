@@ -87,8 +87,8 @@ lane that forgets cannot silently skip every preview test; see
 ## GCS-only suites
 
 `internal/e2e/suites/snapshotcredentials` runs only against an install that
-stores snapshots in GCS, which it reads from the `ate-storage-config`
-ConfigMap, and skips on any other backend, such as the kind lane's
+stores snapshots in GCS, which it reads from the objectstore-plugin sidecar on
+ate-api-server, and skips on any other backend, such as the kind lane's
 S3-compatible service. A lane that is meant to be GCS sets
 `E2E_REQUIRE_GCS=true`, which turns that skip into a failure, so a lane
 misconfigured as S3 cannot pass by running nothing.

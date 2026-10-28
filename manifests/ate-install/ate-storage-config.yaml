@@ -22,9 +22,12 @@
 # same name for rustfs, plus the optional ate-storage-credentials Secret; see
 # manifests/ate-install/kind/ate-storage-config.yaml.
 #
-# NOTE: editing this ConfigMap does not restart the pods that consume it. Follow
-# a change with `kubectl rollout restart` on deployment/ate-api-server and
-# daemonset/atelet, so both sidecars use the same settings.
+# NOTE: change these settings in this file, or in the kind copy, not on the
+# cluster. ate-setup applies the file on every `deploy ate-system`, `deploy
+# apiserver` and `deploy atelet`, overwriting live edits to its keys, and
+# restarts nothing. Follow a change with `kubectl rollout restart` on
+# deployment/ate-api-server and daemonset/atelet, so both sidecars use the same
+# settings.
 apiVersion: v1
 kind: ConfigMap
 metadata:
